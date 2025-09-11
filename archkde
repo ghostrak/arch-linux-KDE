@@ -1,127 +1,92 @@
 #!/bin/bash
+# Automated Arch Linux + KDE Plasma Installer (UEFI, ext4, swap)
+# Includes Wi-Fi, Bluetooth, Steam, Flameshot, and essential apps
+
 set -e
 
-echo ">>> Arch Linux + KDE Installer (UEFI + ext4 + swap, KDE + essentials + Steam + GPU drivers)"
-echo ">>> WARNING: This will ERASE the target disk!"
-sleep 3
+echo "=== Arch Linux KDE Installer ==="
 
 # --- User input ---
-read -p "Enter the target disk (e.g., /dev/sda or /dev/nvme0n1): " DISK
-read -p "Enter swap size (e.g., 2G, 8G, 16G): " SWAP_SIZE
 read -p "Enter hostname: " HOSTNAME
 read -p "Enter username: " USERNAME
-read -sp "Enter user password: " PASSWORD
+read -sp "Enter password for $USERNAME: " PASSWORD
 echo
 read -sp "Enter root password: " ROOTPASS
 echo
+read -p "Enter target disk (e.g. /dev/nvme0n1 or /dev/sda): " DISK
 
-# --- Partition setup ---
-echo ">>> Partitioning $DISK ..."
+# --- Partitioning (UEFI + ext4 + swap) ---
+echo "Partitioning $DISK..."
+parted -s "$DISK" mklabel gpt
+parted -s "$DISK" mkpart ESP fat32 1MiB 513MiB
+parted -s "$DISK" set 1 esp on
+parted -s "$DISK" mkpart primary ext4 513MiB 100%
 
-# Handle NVMe naming vs normal disks
-if [[ "$DISK" == *"nvme"* ]]; then
-    EFI_PART="${DISK}p1"
-    SWAP_PART="${DISK}p2"
-    ROOT_PART="${DISK}p3"
-else
-    EFI_PART="${DISK}1"
-    SWAP_PART="${DISK}2"
-    ROOT_PART="${DISK}3"
-fi
+# --- Formatting ---
+mkfs.fat -F32 "${DISK}p1"
+mkfs.ext4 -F "${DISK}p2"
 
-# Wipe disk and create partitions
-sgdisk -Z "$DISK"
-sgdisk -n 1:0:+512M -t 1:ef00 "$DISK"          # EFI partition
-sgdisk -n 2:0:+${SWAP_SIZE} -t 2:8200 "$DISK"  # Swap
-sgdisk -n 3:0:0 -t 3:8300 "$DISK"              # Root
-partprobe "$DISK"
+# --- Mounting ---
+mount "${DISK}p2" /mnt
+mkdir /mnt/boot
+mount "${DISK}p1" /mnt/boot
 
-# --- Format partitions ---
-echo ">>> Formatting partitions ..."
-mkfs.fat -F32 "$EFI_PART"
-mkswap "$SWAP_PART"
-mkfs.ext4 "$ROOT_PART"
+# --- Base system install ---
+pacstrap /mnt base linux linux-firmware vim sudo networkmanager \
+    git curl dolphin konsole firefox libreoffice discord \
+    iwd wpa_supplicant wireless_tools \
+    bluez bluez-utils bluedevil \
+    flameshot
 
-# --- Mount filesystems ---
-echo ">>> Mounting filesystems ..."
-mount "$ROOT_PART" /mnt
-mkdir -p /mnt/boot
-mount "$EFI_PART" /mnt/boot
-swapon "$SWAP_PART"
-
-# --- Install base system ---
-echo ">>> Installing base system ..."
-pacstrap /mnt base linux linux-firmware vim sudo networkmanager grub efibootmgr pciutils
-
-# --- Generate fstab ---
+# --- Fstab ---
 genfstab -U /mnt >> /mnt/etc/fstab
 
-# --- Enable multilib BEFORE chroot ---
-echo ">>> Enabling multilib ..."
-sed -i '/^\[multilib\]/,/Include/s/^#//' /mnt/etc/pacman.conf
-arch-chroot /mnt pacman -Syu --noconfirm
-
-# --- Configure system ---
+# --- Chroot ---
 arch-chroot /mnt /bin/bash <<EOF
-echo ">>> Configuring system inside chroot ..."
-
-# Timezone (auto-detect via IP)
-ln -sf /usr/share/zoneinfo/\$(curl -s https://ipapi.co/timezone) /etc/localtime
+# Timezone & locale
+ln -sf /usr/share/zoneinfo/UTC /etc/localtime
 hwclock --systohc
-
-# Locale
-echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
 locale-gen
 echo "LANG=en_US.UTF-8" > /etc/locale.conf
 
 # Hostname
 echo "$HOSTNAME" > /etc/hostname
-echo "127.0.0.1    localhost" >> /etc/hosts
-echo "::1          localhost" >> /etc/hosts
-echo "127.0.1.1    $HOSTNAME.localdomain $HOSTNAME" >> /etc/hosts
 
 # Root password
 echo "root:$ROOTPASS" | chpasswd
 
-# Bootloader
-grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
-grub-mkconfig -o /boot/grub/grub.cfg
-
-# Enable services
-systemctl enable NetworkManager
-
-# Create user
-useradd -m -G wheel -s /bin/bash $USERNAME
+# User account
+useradd -m -G wheel -s /bin/bash "$USERNAME"
 echo "$USERNAME:$PASSWORD" | chpasswd
 echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
 
-# KDE Plasma (minimal) + SDDM + essentials
-pacman --noconfirm -S xorg plasma-meta sddm \
-    dolphin konsole firefox libreoffice-still discord \
-    git curl wget htop
+# Enable multilib (for Steam)
+sed -i '/\[multilib\]/,/Include/s/^#//' /etc/pacman.conf
+pacman -Sy --noconfirm
 
-# Steam + 32-bit Vulkan loader
-pacman --noconfirm -S steam steam-native-runtime \
-    lib32-mesa vulkan-icd-loader lib32-vulkan-icd-loader
+# Install Steam
+pacman -S --noconfirm steam steam-native-runtime
 
-# --- GPU driver detection ---
-GPU_VENDOR=\$(lspci | grep -E "VGA|3D" | grep -i -E "Intel|AMD|NVIDIA")
+# Bootloader (systemd-boot)
+bootctl --path=/boot install
+cat <<BOOT > /boot/loader/entries/arch.conf
+title   Arch Linux
+linux   /vmlinuz-linux
+initrd  /initramfs-linux.img
+options root=PARTUUID=$(blkid -s PARTUUID -o value ${DISK}p2) rw
+BOOT
 
-if echo "\$GPU_VENDOR" | grep -qi "Intel"; then
-    echo ">>> Installing Intel GPU drivers..."
-    pacman --noconfirm -S mesa lib32-mesa vulkan-intel lib32-vulkan-intel
-elif echo "\$GPU_VENDOR" | grep -qi "AMD"; then
-    echo ">>> Installing AMD GPU drivers..."
-    pacman --noconfirm -S mesa lib32-mesa vulkan-radeon lib32-vulkan-radeon
-elif echo "\$GPU_VENDOR" | grep -qi "NVIDIA"; then
-    echo ">>> Installing NVIDIA drivers..."
-    pacman --noconfirm -S nvidia nvidia-utils lib32-nvidia-utils
-else
-    echo ">>> WARNING: Could not detect GPU vendor. No drivers installed."
-fi
+# Swapfile (2G by default)
+fallocate -l 2G /swapfile
+chmod 600 /swapfile
+mkswap /swapfile
+echo "/swapfile none swap sw 0 0" >> /etc/fstab
+swapon /swapfile
 
-systemctl enable sddm
-
+# Enable services
+systemctl enable NetworkManager iwd bluetooth sddm
 EOF
 
-echo ">>> Installation complete! You can now reboot."
+echo "=== Installation complete! ==="
+echo "Reboot, log in as $USERNAME, and enjoy KDE Plasma with Wi-Fi, Bluetooth, Steam, and Flameshot."
