@@ -92,15 +92,15 @@ echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
 
 # --- Enable multilib repo for Steam ---
 sed -i '/^\[multilib\]/,/Include/s/^#//' /etc/pacman.conf
-pacman -Sy --noconfirm
+pacman -Syu --noconfirm   # full refresh after enabling multilib
 
 # KDE Plasma (minimal) + SDDM + essentials
 pacman --noconfirm -S xorg plasma-meta sddm \
     dolphin konsole firefox libreoffice-still discord \
     git curl wget htop
 
-# Steam
-pacman --noconfirm -S steam
+# Steam + 32-bit Vulkan loader
+pacman --noconfirm -S steam lib32-mesa vulkan-icd-loader lib32-vulkan-icd-loader
 
 # --- GPU driver detection ---
 GPU_VENDOR=\$(lspci | grep -E "VGA|3D" | grep -i -E "Intel|AMD|NVIDIA")
