@@ -56,6 +56,11 @@ pacstrap /mnt base linux linux-firmware vim sudo networkmanager grub efibootmgr 
 # --- Generate fstab ---
 genfstab -U /mnt >> /mnt/etc/fstab
 
+# --- Enable multilib BEFORE chroot ---
+echo ">>> Enabling multilib ..."
+sed -i '/^\[multilib\]/,/Include/s/^#//' /mnt/etc/pacman.conf
+arch-chroot /mnt pacman -Syu --noconfirm
+
 # --- Configure system ---
 arch-chroot /mnt /bin/bash <<EOF
 echo ">>> Configuring system inside chroot ..."
@@ -90,17 +95,14 @@ useradd -m -G wheel -s /bin/bash $USERNAME
 echo "$USERNAME:$PASSWORD" | chpasswd
 echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
 
-# --- Enable multilib repo for Steam ---
-sed -i '/^\[multilib\]/,/Include/s/^#//' /etc/pacman.conf
-pacman -Syu --noconfirm   # full refresh after enabling multilib
-
 # KDE Plasma (minimal) + SDDM + essentials
 pacman --noconfirm -S xorg plasma-meta sddm \
     dolphin konsole firefox libreoffice-still discord \
     git curl wget htop
 
 # Steam + 32-bit Vulkan loader
-pacman --noconfirm -S steam lib32-mesa vulkan-icd-loader lib32-vulkan-icd-loader
+pacman --noconfirm -S steam steam-native-runtime \
+    lib32-mesa vulkan-icd-loader lib32-vulkan-icd-loader
 
 # --- GPU driver detection ---
 GPU_VENDOR=\$(lspci | grep -E "VGA|3D" | grep -i -E "Intel|AMD|NVIDIA")
