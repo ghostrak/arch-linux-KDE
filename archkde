@@ -1,0 +1,130 @@
+#!/bin/bash
+# Arch Linux KDE Plasma full installer (UEFI + Swap + Root + Hibernate)
+# Run inside Arch ISO live environment
+# WARNING: This will ERASE the selected disk!
+
+set -e
+
+echo "=== Arch Linux KDE Plasma Full Installer (UEFI + Swap + Hibernate) ==="
+read -p "Enter target disk (e.g. /dev/sda): " DISK
+read -p "Enter hostname: " HOSTNAME
+read -p "Enter username: " USERNAME
+read -sp "Enter password for $USERNAME (and root): " PASSWORD
+echo
+read -p "Enter swap size (e.g. 8G for 8 GB): " SWAPSIZE
+
+echo ">>> Enabling NTP & setting keymap..."
+timedatectl set-ntp true
+loadkeys us
+
+echo ">>> Partitioning $DISK..."
+parted -s "$DISK" mklabel gpt
+parted -s "$DISK" mkpart ESP fat32 1MiB 512MiB
+parted -s "$DISK" set 1 esp on
+parted -s "$DISK" mkpart primary linux-swap 512MiB "$SWAPSIZE"
+parted -s "$DISK" mkpart primary ext4 "$SWAPSIZE" 100%
+
+ESP="${DISK}1"
+SWAP="${DISK}2"
+ROOT="${DISK}3"
+
+echo ">>> Formatting partitions..."
+mkfs.fat -F32 "$ESP"
+mkswap "$SWAP"
+mkfs.ext4 -F "$ROOT"
+
+echo ">>> Mounting partitions..."
+mount "$ROOT" /mnt
+mkdir -p /mnt/boot
+mount "$ESP" /mnt/boot
+swapon "$SWAP"
+
+echo ">>> Installing base system..."
+pacstrap /mnt base linux linux-firmware vim networkmanager sudo git wget curl
+
+echo ">>> Generating fstab..."
+genfstab -U /mnt >> /mnt/etc/fstab
+
+echo ">>> Entering chroot..."
+arch-chroot /mnt /bin/bash <<EOF
+# =======================
+# Base configuration
+# =======================
+ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+hwclock --systohc
+echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+locale-gen
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
+
+# Hostname & hosts file
+echo "$HOSTNAME" > /etc/hostname
+cat <<EOT > /etc/hosts
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
+EOT
+
+# Users
+echo "root:$PASSWORD" | chpasswd
+useradd -m -G wheel -s /bin/bash $USERNAME
+echo "$USERNAME:$PASSWORD" | chpasswd
+echo "%wheel ALL=(ALL:ALL) ALL" >> /etc/sudoers
+
+# Enable network
+systemctl enable NetworkManager
+
+# =======================
+# KDE + SDDM
+# =======================
+pacman --noconfirm -S xorg plasma kde-applications sddm
+systemctl enable sddm
+
+# =======================
+# Extras & Apps
+# =======================
+pacman --noconfirm -S \
+    firefox konsole dolphin kate ark gwenview vlc libreoffice-fresh \
+    ffmpeg gst-libav gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-plugins-base \
+    cups system-config-printer bluez bluez-utils pulseaudio-bluetooth \
+    flatpak ufw htop neofetch \
+    kdeconnect okular spectacle partitionmanager
+
+# Enable services
+systemctl enable --now cups
+systemctl enable --now bluetooth
+systemctl enable --now ufw
+
+# Firewall rules
+ufw default deny
+ufw allow ssh
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw enable
+
+# Flatpak setup
+flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+
+# =======================
+# Bootloader + Hibernate
+# =======================
+ROOTUUID=\$(blkid -s UUID -o value $ROOT)
+SWAPUUID=\$(blkid -s UUID -o value $SWAP)
+
+bootctl --path=/boot install
+cat <<EOT > /boot/loader/entries/arch.conf
+title   Arch Linux
+linux   /vmlinuz-linux
+initrd  /initramfs-linux.img
+options root=UUID=\$ROOTUUID rw resume=UUID=\$SWAPUUID
+EOT
+
+# Add resume hook to mkinitcpio.conf
+sed -i 's/HOOKS=(/HOOKS=(base udev autodetect modconf block filesystems keyboard fsck resume /' /etc/mkinitcpio.conf
+mkinitcpio -P
+
+EOF
+
+echo ">>> Installation complete!"
+echo "Reboot, remove the ISO, and log into KDE Plasma with:"
+echo "  Username: $USERNAME"
+echo "  Password: (the one you set earlier)"
