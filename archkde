@@ -36,7 +36,7 @@ pacstrap /mnt base linux linux-firmware vim sudo networkmanager \
     git curl dolphin konsole firefox libreoffice discord \
     iwd wpa_supplicant wireless_tools \
     bluez bluez-utils bluedevil \
-    flameshot
+    flameshot plasma-meta sddm
 
 # --- Fstab ---
 genfstab -U /mnt >> /mnt/etc/fstab
@@ -69,24 +69,4 @@ pacman -Sy --noconfirm
 pacman -S --noconfirm steam steam-native-runtime
 
 # Bootloader (systemd-boot)
-bootctl --path=/boot install
-cat <<BOOT > /boot/loader/entries/arch.conf
-title   Arch Linux
-linux   /vmlinuz-linux
-initrd  /initramfs-linux.img
-options root=PARTUUID=$(blkid -s PARTUUID -o value ${DISK}p2) rw
-BOOT
-
-# Swapfile (2G by default)
-fallocate -l 2G /swapfile
-chmod 600 /swapfile
-mkswap /swapfile
-echo "/swapfile none swap sw 0 0" >> /etc/fstab
-swapon /swapfile
-
-# Enable services
-systemctl enable NetworkManager iwd bluetooth sddm
-EOF
-
-echo "=== Installation complete! ==="
-echo "Reboot, log in as $USERNAME, and enjoy KDE Plasma with Wi-Fi, Bluetooth, Steam, and Flameshot."
+bo
