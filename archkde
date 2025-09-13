@@ -1,48 +1,92 @@
 #!/bin/bash
+# Automated Arch Linux + KDE Plasma Installer (UEFI, ext4, swap)
+# Includes Wi-Fi, Bluetooth, Steam, Flameshot, and essential apps
+
 set -e
 
-# Detect root partition PARTUUID
-ROOT_PARTUUID=$(findmnt -no PARTUUID /)
+echo "=== Arch Linux KDE Installer ==="
 
-# Update system
-sudo pacman -Syu --noconfirm
+# --- User input ---
+read -p "Enter hostname: " HOSTNAME
+read -p "Enter username: " USERNAME
+read -sp "Enter password for $USERNAME: " PASSWORD
+echo
+read -sp "Enter root password: " ROOTPASS
+echo
+read -p "Enter target disk (e.g. /dev/nvme0n1 or /dev/sda): " DISK
 
-# Install base packages + linux-zen kernel
-sudo pacman -S --noconfirm base base-devel linux linux-headers \
-    linux-zen linux-zen-headers linux-firmware \
-    networkmanager bluez bluez-utils \
-    mesa vulkan-radeon lib32-mesa lib32-vulkan-radeon \
-    steam flameshot
+# --- Partitioning (UEFI + ext4 + swap) ---
+echo "Partitioning $DISK..."
+parted -s "$DISK" mklabel gpt
+parted -s "$DISK" mkpart ESP fat32 1MiB 513MiB
+parted -s "$DISK" set 1 esp on
+parted -s "$DISK" mkpart primary ext4 513MiB 100%
 
-# Enable services
-sudo systemctl enable --now NetworkManager
-sudo systemctl enable --now bluetooth
+# --- Formatting ---
+mkfs.fat -F32 "${DISK}p1"
+mkfs.ext4 -F "${DISK}p2"
 
-# Ensure systemd-boot is installed
-bootctl install
+# --- Mounting ---
+mount "${DISK}p2" /mnt
+mkdir /mnt/boot
+mount "${DISK}p1" /mnt/boot
 
-# Create Arch Linux entry (regular kernel)
-cat <<EOF | sudo tee /boot/loader/entries/arch.conf
-title   Arch Linux (default kernel)
+# --- Base system install ---
+pacstrap /mnt base linux linux-firmware vim sudo networkmanager \
+    git curl dolphin konsole firefox libreoffice discord \
+    iwd wpa_supplicant wireless_tools \
+    bluez bluez-utils bluedevil \
+    flameshot plasma-meta sddm
+
+# --- Fstab ---
+genfstab -U /mnt >> /mnt/etc/fstab
+
+# --- Chroot ---
+arch-chroot /mnt /bin/bash <<EOF
+# Timezone & locale
+ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+hwclock --systohc
+echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
+locale-gen
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
+
+# Hostname
+echo "$HOSTNAME" > /etc/hostname
+
+# Root password
+echo "root:$ROOTPASS" | chpasswd
+
+# User account
+useradd -m -G wheel -s /bin/bash "$USERNAME"
+echo "$USERNAME:$PASSWORD" | chpasswd
+echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
+
+# Enable multilib (for Steam)
+sed -i '/\[multilib\]/,/Include/s/^#//' /etc/pacman.conf
+pacman -Sy --noconfirm
+
+# Install Steam
+pacman -S --noconfirm steam steam-native-runtime
+
+# --- Bootloader (systemd-boot) ---
+bootctl --path=/boot install
+cat <<BOOT > /boot/loader/entries/arch.conf
+title   Arch Linux
 linux   /vmlinuz-linux
 initrd  /initramfs-linux.img
-options root=PARTUUID=$ROOT_PARTUUID rw
+options root=PARTUUID=$(blkid -s PARTUUID -o value ${DISK}p2) rw
+BOOT
+
+# --- Swapfile (2G by default) ---
+fallocate -l 2G /swapfile
+chmod 600 /swapfile
+mkswap /swapfile
+echo "/swapfile none swap sw 0 0" >> /etc/fstab
+swapon /swapfile
+
+# --- Enable services ---
+systemctl enable NetworkManager iwd bluetooth sddm
 EOF
 
-# Create Arch Linux entry (Zen kernel)
-cat <<EOF | sudo tee /boot/loader/entries/arch-zen.conf
-title   Arch Linux (Zen kernel)
-linux   /vmlinuz-linux-zen
-initrd  /initramfs-linux-zen.img
-options root=PARTUUID=$ROOT_PARTUUID rw
-EOF
-
-# Configure systemd-boot loader with 5s timeout, default Zen kernel
-cat <<EOF | sudo tee /boot/loader/loader.conf
-default arch-zen.conf
-timeout 5
-editor no
-EOF
-
-echo "Installation complete. Reboot to use Arch Linux (Zen kernel) by default."
-echo "You will have 5 seconds to pick a different kernel at boot."
+echo "=== Installation complete! ==="
+echo "Reboot, log in as $USERNAME, and enjoy KDE Plasma with Wi-Fi, Bluetooth, Steam, and Flameshot."
