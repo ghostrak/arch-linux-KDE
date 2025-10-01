@@ -212,7 +212,7 @@ echo "Installing base system (this may take a while)..."
 if [ "$INSTALL_KDE" == "yes" ]; then
     echo "Installing base system with KDE Plasma (minimal with Wayland)..."
     pacstrap /mnt base linux linux-firmware base-devel networkmanager grub efibootmgr vim nano sudo os-prober \
-        plasma-desktop plasma-wayland-session sddm konsole dolphin firefox
+        plasma-desktop plasma-wayland-protocols plasma-workspace-wayland sddm konsole dolphin firefox
 else
     echo "Installing base system without desktop environment..."
     pacstrap /mnt base linux linux-firmware base-devel networkmanager grub efibootmgr vim nano sudo os-prober
