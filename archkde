@@ -1,92 +1,322 @@
 #!/bin/bash
-# Automated Arch Linux + KDE Plasma Installer (UEFI, ext4, swap)
-# Includes Wi-Fi, Bluetooth, Steam, Flameshot, and essential apps
-
 set -e
 
-echo "=== Arch Linux KDE Installer ==="
+# Arch Linux Installation Script (Multi-boot Safe)
+# This script allows installation alongside existing systems
 
-# --- User input ---
+echo "======================================"
+echo "  Arch Linux Installation Script"
+echo "  (Multi-boot Safe Version)"
+echo "======================================"
+echo ""
+
+# Check if running in UEFI mode
+if [ ! -d /sys/firmware/efi/efivars ]; then
+    echo "ERROR: This script requires UEFI mode. Legacy BIOS is not supported."
+    exit 1
+fi
+
+# List available disks and partitions
+echo "Available disks and partitions:"
+lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT
+echo ""
+
+echo "Installation options:"
+echo "1) Use existing partitions (recommended for dual-boot)"
+echo "2) Create new partitions on free space"
+echo ""
+read -p "Select option (1 or 2): " INSTALL_OPTION
+
+if [ "$INSTALL_OPTION" == "1" ]; then
+    # Use existing partitions
+    echo ""
+    echo "=== Using Existing Partitions ==="
+    echo ""
+    echo "You need:"
+    echo "  - An EFI partition (if you don't already have one from another OS)"
+    echo "  - A partition for Arch Linux root (/)"
+    echo ""
+    
+    read -p "Do you have an existing EFI partition to use? (yes/no): " HAS_EFI
+    
+    if [ "$HAS_EFI" == "yes" ]; then
+        echo ""
+        echo "Current partitions:"
+        lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT
+        echo ""
+        read -p "Enter existing EFI partition (e.g., /dev/sda1 or /dev/nvme0n1p1): " BOOT_PART
+        
+        if [ ! -b "$BOOT_PART" ]; then
+            echo "ERROR: $BOOT_PART is not a valid block device"
+            exit 1
+        fi
+        
+        FORMAT_BOOT=false
+        echo "WARNING: Using existing EFI partition. It will NOT be formatted."
+    else
+        echo ""
+        echo "Current partitions:"
+        lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT
+        echo ""
+        read -p "Enter partition to use as EFI (will be formatted as FAT32): " BOOT_PART
+        
+        if [ ! -b "$BOOT_PART" ]; then
+            echo "ERROR: $BOOT_PART is not a valid block device"
+            exit 1
+        fi
+        
+        FORMAT_BOOT=true
+        echo "WARNING: $BOOT_PART will be formatted as FAT32!"
+    fi
+    
+    echo ""
+    echo "Current partitions:"
+    lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT
+    echo ""
+    read -p "Enter partition for Arch Linux root (will be formatted as ext4): " ROOT_PART
+    
+    if [ ! -b "$ROOT_PART" ]; then
+        echo "ERROR: $ROOT_PART is not a valid block device"
+        exit 1
+    fi
+    
+    echo ""
+    echo "WARNING: $ROOT_PART will be formatted as ext4 and all data will be lost!"
+    read -p "Continue? (yes/no): " CONFIRM
+    if [ "$CONFIRM" != "yes" ]; then
+        echo "Installation cancelled."
+        exit 0
+    fi
+
+elif [ "$INSTALL_OPTION" == "2" ]; then
+    # Create new partitions
+    echo ""
+    echo "=== Creating New Partitions ==="
+    echo ""
+    echo "Available disks:"
+    lsblk -d -n -p -o NAME,SIZE,TYPE | grep disk
+    echo ""
+    read -p "Enter disk to partition (e.g., /dev/sda): " DISK
+    
+    if [ ! -b "$DISK" ]; then
+        echo "ERROR: $DISK is not a valid block device"
+        exit 1
+    fi
+    
+    echo ""
+    echo "Current partition layout of $DISK:"
+    parted "$DISK" print free
+    echo ""
+    
+    read -p "Do you need to create an EFI partition? (yes/no): " CREATE_EFI
+    
+    if [ "$CREATE_EFI" == "yes" ]; then
+        read -p "Enter start position for EFI partition (e.g., 100GB): " EFI_START
+        read -p "Enter end position for EFI partition (e.g., 100.5GB): " EFI_END
+        
+        echo "Creating EFI partition from $EFI_START to $EFI_END..."
+        parted -s "$DISK" mkpart ESP fat32 "$EFI_START" "$EFI_END"
+        parted -s "$DISK" set $(parted "$DISK" print | grep ESP | tail -1 | awk '{print $1}') esp on
+        
+        # Determine partition name
+        PART_NUM=$(parted "$DISK" print | grep ESP | tail -1 | awk '{print $1}')
+        if [[ "$DISK" =~ "nvme" ]]; then
+            BOOT_PART="${DISK}p${PART_NUM}"
+        else
+            BOOT_PART="${DISK}${PART_NUM}"
+        fi
+        FORMAT_BOOT=true
+    else
+        echo ""
+        echo "Current partitions:"
+        lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT
+        echo ""
+        read -p "Enter existing EFI partition: " BOOT_PART
+        
+        if [ ! -b "$BOOT_PART" ]; then
+            echo "ERROR: $BOOT_PART is not a valid block device"
+            exit 1
+        fi
+        FORMAT_BOOT=false
+    fi
+    
+    read -p "Enter start position for root partition (e.g., 100.5GB): " ROOT_START
+    read -p "Enter end position for root partition (e.g., 150GB): " ROOT_END
+    
+    echo "Creating root partition from $ROOT_START to $ROOT_END..."
+    parted -s "$DISK" mkpart primary ext4 "$ROOT_START" "$ROOT_END"
+    
+    # Determine partition name
+    PART_NUM=$(parted "$DISK" print | tail -2 | head -1 | awk '{print $1}')
+    if [[ "$DISK" =~ "nvme" ]]; then
+        ROOT_PART="${DISK}p${PART_NUM}"
+    else
+        ROOT_PART="${DISK}${PART_NUM}"
+    fi
+    
+    echo ""
+    echo "Partitions created:"
+    echo "  EFI: $BOOT_PART"
+    echo "  Root: $ROOT_PART"
+    
+else
+    echo "Invalid option selected."
+    exit 1
+fi
+
+# Get system configuration
+echo ""
+echo "=== System Configuration ==="
 read -p "Enter hostname: " HOSTNAME
 read -p "Enter username: " USERNAME
-read -sp "Enter password for $USERNAME: " PASSWORD
-echo
-read -sp "Enter root password: " ROOTPASS
-echo
-read -p "Enter target disk (e.g. /dev/nvme0n1 or /dev/sda): " DISK
+read -s -p "Enter password for $USERNAME: " USER_PASSWORD
+echo ""
+read -s -p "Enter root password: " ROOT_PASSWORD
+echo ""
+read -p "Enter timezone (e.g., America/New_York): " TIMEZONE
+read -p "Enter locale (e.g., en_US.UTF-8): " LOCALE
 
-# --- Partitioning (UEFI + ext4 + swap) ---
-echo "Partitioning $DISK..."
-parted -s "$DISK" mklabel gpt
-parted -s "$DISK" mkpart ESP fat32 1MiB 513MiB
-parted -s "$DISK" set 1 esp on
-parted -s "$DISK" mkpart primary ext4 513MiB 100%
+# Sync system clock
+echo ""
+echo "Syncing system clock..."
+timedatectl set-ntp true
 
-# --- Formatting ---
-mkfs.fat -F32 "${DISK}p1"
-mkfs.ext4 -F "${DISK}p2"
+# Format partitions
+echo ""
+echo "Formatting partitions..."
 
-# --- Mounting ---
-mount "${DISK}p2" /mnt
-mkdir /mnt/boot
-mount "${DISK}p1" /mnt/boot
+if [ "$FORMAT_BOOT" == "true" ]; then
+    echo "Formatting $BOOT_PART as FAT32..."
+    mkfs.fat -F32 "$BOOT_PART"
+else
+    echo "Skipping EFI partition formatting (using existing)..."
+fi
 
-# --- Base system install ---
-pacstrap /mnt base linux linux-firmware vim sudo networkmanager \
-    git curl dolphin konsole firefox libreoffice discord \
-    iwd wpa_supplicant wireless_tools \
-    bluez bluez-utils bluedevil \
-    flameshot plasma-meta sddm
+echo "Formatting $ROOT_PART as ext4..."
+mkfs.ext4 -F "$ROOT_PART"
 
-# --- Fstab ---
+# Mount partitions
+echo ""
+echo "Mounting partitions..."
+mount "$ROOT_PART" /mnt
+mkdir -p /mnt/boot
+mount "$BOOT_PART" /mnt/boot
+
+# Ask about desktop environment
+echo ""
+read -p "Install KDE Plasma desktop environment? (yes/no): " INSTALL_KDE
+
+# Install base system
+echo ""
+echo "Installing base system (this may take a while)..."
+if [ "$INSTALL_KDE" == "yes" ]; then
+    echo "Installing base system with KDE Plasma (minimal with Wayland)..."
+    pacstrap /mnt base linux linux-firmware base-devel networkmanager grub efibootmgr vim nano sudo os-prober \
+        plasma-desktop plasma-wayland-session sddm konsole dolphin firefox
+else
+    echo "Installing base system without desktop environment..."
+    pacstrap /mnt base linux linux-firmware base-devel networkmanager grub efibootmgr vim nano sudo os-prober
+fi
+
+# Generate fstab
+echo ""
+echo "Generating fstab..."
 genfstab -U /mnt >> /mnt/etc/fstab
 
-# --- Chroot ---
-arch-chroot /mnt /bin/bash <<EOF
-# Timezone & locale
-ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+# Create configuration script to run in chroot
+cat > /mnt/config.sh << EOF
+#!/bin/bash
+set -e
+
+INSTALL_KDE="$INSTALL_KDE"
+
+# Set timezone
+ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
 hwclock --systohc
-echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
+
+# Set locale
+echo "$LOCALE UTF-8" >> /etc/locale.gen
 locale-gen
-echo "LANG=en_US.UTF-8" > /etc/locale.conf
+echo "LANG=$LOCALE" > /etc/locale.conf
 
-# Hostname
+# Set hostname
 echo "$HOSTNAME" > /etc/hostname
+cat > /etc/hosts << EOL
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
+EOL
 
-# Root password
-echo "root:$ROOTPASS" | chpasswd
+# Set root password
+echo "root:$ROOT_PASSWORD" | chpasswd
 
-# User account
-useradd -m -G wheel -s /bin/bash "$USERNAME"
-echo "$USERNAME:$PASSWORD" | chpasswd
-echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
+# Create user
+useradd -m -G wheel -s /bin/bash $USERNAME
+echo "$USERNAME:$USER_PASSWORD" | chpasswd
 
-# Enable multilib (for Steam)
-sed -i '/\[multilib\]/,/Include/s/^#//' /etc/pacman.conf
-pacman -Sy --noconfirm
+# Enable sudo for wheel group
+sed -i 's/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
 
-# Install Steam
-pacman -S --noconfirm steam steam-native-runtime
+# Enable os-prober for detecting other operating systems
+echo "GRUB_DISABLE_OS_PROBER=false" >> /etc/default/grub
 
-# --- Bootloader (systemd-boot) ---
-bootctl --path=/boot install
-cat <<BOOT > /boot/loader/entries/arch.conf
-title   Arch Linux
-linux   /vmlinuz-linux
-initrd  /initramfs-linux.img
-options root=PARTUUID=$(blkid -s PARTUUID -o value ${DISK}p2) rw
-BOOT
+# Install and configure GRUB
+grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=Arch --recheck
+grub-mkconfig -o /boot/grub/grub.cfg
 
-# --- Swapfile (2G by default) ---
-fallocate -l 2G /swapfile
-chmod 600 /swapfile
-mkswap /swapfile
-echo "/swapfile none swap sw 0 0" >> /etc/fstab
-swapon /swapfile
+# Enable NetworkManager
+systemctl enable NetworkManager
 
-# --- Enable services ---
-systemctl enable NetworkManager iwd bluetooth sddm
+# Enable SDDM if KDE was installed
+if [ "$INSTALL_KDE" == "yes" ]; then
+    systemctl enable sddm
+    echo "KDE Plasma and SDDM enabled"
+fi
+
+echo ""
+echo "Configuration complete!"
 EOF
 
-echo "=== Installation complete! ==="
-echo "Reboot, log in as $USERNAME, and enjoy KDE Plasma with Wi-Fi, Bluetooth, Steam, and Flameshot."
+# Make configuration script executable
+chmod +x /mnt/config.sh
+
+# Run configuration in chroot
+echo ""
+echo "Configuring system..."
+arch-chroot /mnt /config.sh
+
+# Clean up
+rm /mnt/config.sh
+
+# Unmount partitions
+echo ""
+echo "Unmounting partitions..."
+umount -R /mnt
+
+echo ""
+echo "======================================"
+echo "  Installation Complete!"
+echo "======================================"
+echo ""
+echo "Your Arch Linux installation is complete!"
+echo ""
+echo "IMPORTANT - Multi-boot setup:"
+echo "  - GRUB has been installed with os-prober enabled"
+echo "  - Other operating systems should be detected automatically"
+echo "  - If you have another bootloader (like Windows), you may need to:"
+echo "    * Set Arch as default in your UEFI boot order, OR"
+echo "    * Boot into your other OS and update its bootloader"
+echo ""
+echo "You can now reboot into your new Arch Linux system."
+echo "Type 'reboot' to restart."
+echo ""
+if [ "$INSTALL_KDE" == "yes" ]; then
+    echo "KDE Plasma has been installed and will start automatically on boot."
+    echo ""
+else
+    echo "After reboot, you can:"
+    echo "  - Connect to WiFi: nmcli device wifi connect SSID password PASSWORD"
+    echo "  - Install a desktop environment (e.g., sudo pacman -S xorg gnome)"
+    echo "  - Enable display manager (e.g., sudo systemctl enable gdm)"
+    echo ""
+fi
