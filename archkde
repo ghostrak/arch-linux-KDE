@@ -209,14 +209,7 @@ read -p "Install KDE Plasma desktop environment? (yes/no): " INSTALL_KDE
 # Install base system
 echo ""
 echo "Installing base system (this may take a while)..."
-if [ "$INSTALL_KDE" == "yes" ]; then
-    echo "Installing base system with KDE Plasma (minimal with Wayland)..."
-    pacstrap /mnt base linux linux-firmware base-devel networkmanager grub efibootmgr vim nano sudo os-prober \
-        plasma-desktop plasma-wayland-protocols plasma-workspace-wayland sddm konsole dolphin firefox
-else
-    echo "Installing base system without desktop environment..."
-    pacstrap /mnt base linux linux-firmware base-devel networkmanager grub efibootmgr vim nano sudo os-prober
-fi
+pacstrap /mnt base linux linux-firmware base-devel networkmanager grub efibootmgr vim nano sudo os-prober
 
 # Generate fstab
 echo ""
@@ -227,8 +220,6 @@ genfstab -U /mnt >> /mnt/etc/fstab
 cat > /mnt/config.sh << EOF
 #!/bin/bash
 set -e
-
-INSTALL_KDE="$INSTALL_KDE"
 
 # Set timezone
 ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
@@ -267,12 +258,6 @@ grub-mkconfig -o /boot/grub/grub.cfg
 # Enable NetworkManager
 systemctl enable NetworkManager
 
-# Enable SDDM if KDE was installed
-if [ "$INSTALL_KDE" == "yes" ]; then
-    systemctl enable sddm
-    echo "KDE Plasma and SDDM enabled"
-fi
-
 echo ""
 echo "Configuration complete!"
 EOF
@@ -310,13 +295,7 @@ echo ""
 echo "You can now reboot into your new Arch Linux system."
 echo "Type 'reboot' to restart."
 echo ""
-if [ "$INSTALL_KDE" == "yes" ]; then
-    echo "KDE Plasma has been installed and will start automatically on boot."
-    echo ""
-else
-    echo "After reboot, you can:"
-    echo "  - Connect to WiFi: nmcli device wifi connect SSID password PASSWORD"
-    echo "  - Install a desktop environment (e.g., sudo pacman -S xorg gnome)"
-    echo "  - Enable display manager (e.g., sudo systemctl enable gdm)"
-    echo ""
-fi
+echo "After reboot, you can:"
+echo "  - Connect to WiFi: nmcli device wifi connect SSID password PASSWORD"
+echo "  - Install a desktop environment with the post-install script"
+echo ""
