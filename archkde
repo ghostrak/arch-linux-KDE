@@ -175,6 +175,8 @@ read -s -p "Enter root password: " ROOT_PASSWORD
 echo ""
 read -p "Enter timezone (e.g., America/New_York): " TIMEZONE
 read -p "Enter locale (e.g., en_US.UTF-8): " LOCALE
+echo ""
+read -p "Install KDE Plasma with Wayland after base installation? (yes/no): " INSTALL_KDE
 
 # Sync system clock
 echo ""
@@ -221,6 +223,8 @@ cat > /mnt/config.sh << EOF
 #!/bin/bash
 set -e
 
+INSTALL_KDE="$INSTALL_KDE"
+
 # Set timezone
 ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
 hwclock --systohc
@@ -257,6 +261,15 @@ grub-mkconfig -o /boot/grub/grub.cfg
 
 # Enable NetworkManager
 systemctl enable NetworkManager
+
+# Install KDE Plasma if requested
+if [ "\$INSTALL_KDE" == "yes" ]; then
+    echo ""
+    echo "Installing KDE Plasma with Wayland..."
+    pacman -S --noconfirm plasma-meta sddm konsole dolphin firefox
+    systemctl enable sddm
+    echo "KDE Plasma installed and SDDM enabled"
+fi
 
 echo ""
 echo "Configuration complete!"
@@ -295,7 +308,13 @@ echo ""
 echo "You can now reboot into your new Arch Linux system."
 echo "Type 'reboot' to restart."
 echo ""
-echo "After reboot, you can:"
-echo "  - Connect to WiFi: nmcli device wifi connect SSID password PASSWORD"
-echo "  - Install a desktop environment with the post-install script"
-echo ""
+if [ "$INSTALL_KDE" == "yes" ]; then
+    echo "KDE Plasma has been installed and will start automatically on boot."
+    echo "At login, you can select 'Plasma (Wayland)' from the session menu."
+    echo ""
+else
+    echo "After reboot, you can:"
+    echo "  - Connect to WiFi: nmcli device wifi connect SSID password PASSWORD"
+    echo "  - Install a desktop environment with the post-install script"
+    echo ""
+fi
